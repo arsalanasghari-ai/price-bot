@@ -106,6 +106,50 @@ def get_trend_label(key, current_price):
 
 # ===================== اخبار =====================
 
+def get_momentum(key):
+    """
+    شتاب روند را با مقایسه تغییر ۱۲ ساعت اخیر نسبت به ۱۲ ساعت قبل از آن می‌سنجد.
+    خروجی عددی است: مثبت = شتاب صعودی در حال افزایش، منفی = شتاب نزولی در حال افزایش.
+    """
+    try:
+        r = requests.get(TREND_URL, timeout=10)
+        if r.status_code != 200:
+            return 0
+        data = r.json()
+        entries = data.get(key, [])
+        if len(entries) < 3:
+            return 0
+
+        now = time.time()
+        recent = [p for ts, p in entries if now - ts <= 12 * 3600]
+        older = [p for ts, p in entries if 12 * 3600 < now - ts <= 24 * 3600]
+
+        if len(recent) < 2 or len(older) < 2:
+            return 0
+
+        recent_change = (recent[-1] - recent[0]) / recent[0] * 100
+        older_change = (older[-1] - older[0]) / older[0] * 100
+
+        return recent_change - older_change
+    except Exception as e:
+        print(f"خطا محاسبه شتاب: {e}")
+        return 0
+
+def simple_forecast_label(key, has_related_news, news_sentiment_hint=0):
+    """
+    پیش‌بینی بسیار ساده و غیرقطعی بر اساس شتاب روند + وجود خبر مرتبط.
+    این یک تخمین آماری ضعیف است، نه پیش‌بینی دقیق.
+    """
+    momentum = get_momentum(key)
+    score = momentum + news_sentiment_hint
+
+    if score > 0.5:
+        return "📈 احتمال نسبی صعودی برای فردا (شتاب مثبت)"
+    elif score < -0.5:
+        return "📉 احتمال نسبی نزولی برای فردا (شتاب منفی)"
+    else:
+        return "➡️ احتمال نسبی خنثی برای فردا (بدون شتاب مشخص)"
+
 def get_relevant_news(limit=2):
     titles = []
     for feed_url in RSS_FEEDS:
@@ -137,44 +181,66 @@ def translate_title(title):
 
 # ===================== ساخت پیام =====================
 
+def asset_has_news(news_titles, asset_key):
+    keyword_map = {
+        "gold_18k": ["gold"],
+        "bitcoin": ["bitcoin", "crypto"],
+        "tether": ["dollar", "fed", "inflation"],
+    }
+    kws = keyword_map.get(asset_key, [])
+    for t in news_titles:
+        if any(k in t.lower() for k in kws):
+            return True
+    return False
+
 def build_price_message():
     gold = get_gold_price()
     usd_rial = get_usd_to_rial()
     btc_usd, usdt_usd = get_crypto_prices_usd()
+    news_titles = get_relevant_news(limit=5)
 
-    lines = ["💰 <b>قیمت لحظه‌ای و تحلیل روند</b>\n"]
+    lines = ["💰 <b>قیمت لحظه‌ای، روند و پیش‌بینی فردا</b>\n"]
 
     if gold:
         trend = get_trend_label("gold_18k", gold)
+        has_news = asset_has_news(news_titles, "gold_18k")
+        forecast = simple_forecast_label("gold_18k", has_news, news_sentiment_hint=0.3 if has_news else 0)
         lines.append(f"🟡 <b>طلای ۱۸ عیار:</b> {gold:,} ریال")
-        lines.append(f"   {trend}")
+        lines.append(f"   روند: {trend}")
+        lines.append(f"   فردا: {forecast}")
     else:
         lines.append("🟡 طلا: دریافت نشد")
 
     if btc_usd:
         trend = get_trend_label("bitcoin", btc_usd)
+        has_news = asset_has_news(news_titles, "bitcoin")
+        forecast = simple_forecast_label("bitcoin", has_news, news_sentiment_hint=0.3 if has_news else 0)
         lines.append(f"\n₿ <b>بیت‌کوین:</b> {btc_usd:,.0f} دلار")
-        lines.append(f"   {trend}")
+        lines.append(f"   روند: {trend}")
+        lines.append(f"   فردا: {forecast}")
     else:
         lines.append("\n₿ بیت‌کوین: دریافت نشد")
 
     if usdt_usd:
         tether_rial = int(usdt_usd * usd_rial)
         trend = get_trend_label("tether", tether_rial)
+        has_news = asset_has_news(news_titles, "tether")
+        forecast = simple_forecast_label("tether", has_news, news_sentiment_hint=0.3 if has_news else 0)
         lines.append(f"\n💵 <b>تتر:</b> {tether_rial:,} ریال")
-        lines.append(f"   {trend}")
+        lines.append(f"   روند: {trend}")
+        lines.append(f"   فردا: {forecast}")
     else:
         lines.append("\n💵 تتر: دریافت نشد")
 
-    news = get_relevant_news(limit=2)
-    if news:
+    if news_titles:
         lines.append("\n\n📰 <b>اخبار مرتبط با بازار:</b>")
-        for n in news:
+        for n in news_titles[:2]:
             lines.append(f"• {translate_title(n)}")
 
     lines.append(
-        "\n\n⚠️ <i>این تحلیل صرفاً نشان‌دهنده روند گذشته است و "
-        "پیش‌بینی قیمت آینده نیست. تصمیم خرید/فروش بر عهده شماست.</i>"
+        "\n\n⚠️ <i>بخش «فردا» یک تخمین آماری ضعیف بر اساس شتاب روند اخیر و وجود خبر مرتبط است، "
+        "نه پیش‌بینی دقیق. دقت این نوع تخمین در عمل نزدیک به شانس است و قیمت دارایی‌ها می‌تواند "
+        "خلاف آن حرکت کند. مسئولیت هر تصمیم خرید/فروش کاملاً با شماست.</i>"
     )
     lines.append(f"\n🕐 {time.strftime('%Y-%m-%d %H:%M')}")
     return "\n".join(lines)
