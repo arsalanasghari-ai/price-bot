@@ -106,6 +106,45 @@ def get_trend_label(key, current_price):
 
 # ===================== اخبار =====================
 
+POSITIVE_WORDS = [
+    "rise", "rises", "rising", "rose", "surge", "surges", "jump", "jumps",
+    "gain", "gains", "rally", "rallies", "soar", "soars", "climb", "climbs",
+    "boost", "boosts", "higher", "up", "increase", "increases", "strengthen",
+    "record high", "advance", "advances"
+]
+NEGATIVE_WORDS = [
+    "fall", "falls", "falling", "fell", "drop", "drops", "plunge", "plunges",
+    "sink", "sinks", "slump", "slumps", "decline", "declines", "tumble",
+    "tumbles", "lower", "down", "decrease", "decreases", "weaken", "cut",
+    "cuts", "crash", "crashes", "worst", "loss", "losses"
+]
+
+def news_sentiment_score(news_titles, asset_key):
+    """
+    عناوین خبری مرتبط با یک دارایی را برای کلمات مثبت/منفی بررسی می‌کند.
+    خروجی عددی است: مثبت = اخبار به سمت رشد اشاره دارند، منفی = به سمت کاهش.
+    این صرفاً شمارش کلمات کلیدی ساده است، نه تحلیل واقعی معنایی.
+    """
+    keyword_map = {
+        "gold_18k": ["gold"],
+        "bitcoin": ["bitcoin", "crypto"],
+        "tether": ["dollar", "fed", "inflation"],
+    }
+    kws = keyword_map.get(asset_key, [])
+    score = 0
+    matched_any = False
+
+    for t in news_titles:
+        t_lower = t.lower()
+        if any(k in t_lower for k in kws):
+            matched_any = True
+            if any(pw in t_lower for pw in POSITIVE_WORDS):
+                score += 1
+            if any(nw in t_lower for nw in NEGATIVE_WORDS):
+                score -= 1
+
+    return score, matched_any
+
 def get_momentum(key):
     """
     شتاب روند را با مقایسه تغییر ۱۲ ساعت اخیر نسبت به ۱۲ ساعت قبل از آن می‌سنجد.
@@ -135,20 +174,19 @@ def get_momentum(key):
         print(f"خطا محاسبه شتاب: {e}")
         return 0
 
-def simple_forecast_label(key, has_related_news, news_sentiment_hint=0):
+def simple_forecast_label(key, momentum, sentiment_score):
     """
-    پیش‌بینی بسیار ساده و غیرقطعی بر اساس شتاب روند + وجود خبر مرتبط.
-    این یک تخمین آماری ضعیف است، نه پیش‌بینی دقیق.
+    پیش‌بینی ساده و غیرقطعی بر اساس ترکیب شتاب روند قیمت + لحن کلمات کلیدی اخبار.
+    این یک تخمین آماری ضعیف است که دقتش در عمل نزدیک به شانس است، نه پیش‌بینی دقیق.
     """
-    momentum = get_momentum(key)
-    score = momentum + news_sentiment_hint
+    score = momentum * 0.5 + sentiment_score * 1.0
 
-    if score > 0.5:
-        return "📈 احتمال نسبی صعودی برای فردا (شتاب مثبت)"
-    elif score < -0.5:
-        return "📉 احتمال نسبی نزولی برای فردا (شتاب منفی)"
+    if score > 0.7:
+        return "📈 احتمال نسبی صعودی برای فردا"
+    elif score < -0.7:
+        return "📉 احتمال نسبی نزولی برای فردا"
     else:
-        return "➡️ احتمال نسبی خنثی برای فردا (بدون شتاب مشخص)"
+        return "➡️ احتمال نسبی خنثی برای فردا (سیگنال واضحی در داده‌ها دیده نشد)"
 
 def get_relevant_news(limit=2):
     titles = []
@@ -181,30 +219,19 @@ def translate_title(title):
 
 # ===================== ساخت پیام =====================
 
-def asset_has_news(news_titles, asset_key):
-    keyword_map = {
-        "gold_18k": ["gold"],
-        "bitcoin": ["bitcoin", "crypto"],
-        "tether": ["dollar", "fed", "inflation"],
-    }
-    kws = keyword_map.get(asset_key, [])
-    for t in news_titles:
-        if any(k in t.lower() for k in kws):
-            return True
-    return False
-
 def build_price_message():
     gold = get_gold_price()
     usd_rial = get_usd_to_rial()
     btc_usd, usdt_usd = get_crypto_prices_usd()
-    news_titles = get_relevant_news(limit=5)
+    news_titles = get_relevant_news(limit=8)
 
     lines = ["💰 <b>قیمت لحظه‌ای، روند و پیش‌بینی فردا</b>\n"]
 
     if gold:
         trend = get_trend_label("gold_18k", gold)
-        has_news = asset_has_news(news_titles, "gold_18k")
-        forecast = simple_forecast_label("gold_18k", has_news, news_sentiment_hint=0.3 if has_news else 0)
+        momentum = get_momentum("gold_18k")
+        sentiment, has_news = news_sentiment_score(news_titles, "gold_18k")
+        forecast = simple_forecast_label("gold_18k", momentum, sentiment)
         lines.append(f"🟡 <b>طلای ۱۸ عیار:</b> {gold:,} ریال")
         lines.append(f"   روند: {trend}")
         lines.append(f"   فردا: {forecast}")
@@ -213,8 +240,9 @@ def build_price_message():
 
     if btc_usd:
         trend = get_trend_label("bitcoin", btc_usd)
-        has_news = asset_has_news(news_titles, "bitcoin")
-        forecast = simple_forecast_label("bitcoin", has_news, news_sentiment_hint=0.3 if has_news else 0)
+        momentum = get_momentum("bitcoin")
+        sentiment, has_news = news_sentiment_score(news_titles, "bitcoin")
+        forecast = simple_forecast_label("bitcoin", momentum, sentiment)
         lines.append(f"\n₿ <b>بیت‌کوین:</b> {btc_usd:,.0f} دلار")
         lines.append(f"   روند: {trend}")
         lines.append(f"   فردا: {forecast}")
@@ -224,8 +252,9 @@ def build_price_message():
     if usdt_usd:
         tether_rial = int(usdt_usd * usd_rial)
         trend = get_trend_label("tether", tether_rial)
-        has_news = asset_has_news(news_titles, "tether")
-        forecast = simple_forecast_label("tether", has_news, news_sentiment_hint=0.3 if has_news else 0)
+        momentum = get_momentum("tether")
+        sentiment, has_news = news_sentiment_score(news_titles, "tether")
+        forecast = simple_forecast_label("tether", momentum, sentiment)
         lines.append(f"\n💵 <b>تتر:</b> {tether_rial:,} ریال")
         lines.append(f"   روند: {trend}")
         lines.append(f"   فردا: {forecast}")
@@ -238,9 +267,10 @@ def build_price_message():
             lines.append(f"• {translate_title(n)}")
 
     lines.append(
-        "\n\n⚠️ <i>بخش «فردا» یک تخمین آماری ضعیف بر اساس شتاب روند اخیر و وجود خبر مرتبط است، "
-        "نه پیش‌بینی دقیق. دقت این نوع تخمین در عمل نزدیک به شانس است و قیمت دارایی‌ها می‌تواند "
-        "خلاف آن حرکت کند. مسئولیت هر تصمیم خرید/فروش کاملاً با شماست.</i>"
+        "\n\n⚠️ <i>بخش «فردا» از ترکیب شتاب روند قیمت و لحن کلمات کلیدی در عناوین خبری "
+        "محاسبه می‌شود؛ این صرفاً یک تخمین آماری ساده است، نه پیش‌بینی دقیق یا سیگنال معاملاتی. "
+        "دقت این نوع تخمین در عمل نزدیک به شانس است و قیمت دارایی‌ها می‌تواند کاملاً خلاف آن "
+        "حرکت کند. مسئولیت هر تصمیم خرید/فروش کاملاً با شماست.</i>"
     )
     lines.append(f"\n🕐 {time.strftime('%Y-%m-%d %H:%M')}")
     return "\n".join(lines)
