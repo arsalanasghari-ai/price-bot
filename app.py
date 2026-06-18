@@ -26,17 +26,31 @@ KEYWORDS = [
 
 # ===================== قیمت‌های لحظه‌ای =====================
 
-def get_gold_price():
+def get_gold_price_and_ounce():
+    """طلای ۱۸ عیار به ریال + اونس جهانی به دلار"""
+    gold_18k = None
+    ounce_usd = None
     try:
         headers = {"x-access-token": GOLDAPI_KEY}
         r = requests.get("https://www.goldapi.io/api/XAU/IRR", headers=headers, timeout=15)
         data = r.json()
         price_18k = float(data.get('price_gram_24k', 0)) * 0.75
         if 50_000_000 < price_18k < 600_000_000:
-            return int(price_18k)
+            gold_18k = int(price_18k)
     except Exception as e:
-        print(f"خطا طلا: {e}")
-    return None
+        print(f"خطا طلا (ریال): {e}")
+
+    try:
+        headers = {"x-access-token": GOLDAPI_KEY}
+        r2 = requests.get("https://www.goldapi.io/api/XAU/USD", headers=headers, timeout=15)
+        data2 = r2.json()
+        ounce_usd = float(data2.get('price', 0))
+        if not (500 < ounce_usd < 20000):
+            ounce_usd = None
+    except Exception as e:
+        print(f"خطا اونس (دلار): {e}")
+
+    return gold_18k, ounce_usd
 
 def get_usd_to_rial():
     try:
@@ -174,16 +188,51 @@ def get_momentum(key):
         print(f"خطا محاسبه شتاب: {e}")
         return 0
 
-def simple_forecast_label(key, momentum, sentiment_score):
+def get_trend_change_value(key, current_price):
+    """درصد تغییر نسبت به ~24 ساعت قبل را به‌صورت عددی برمی‌گرداند (نه فقط متن)."""
+    try:
+        r = requests.get(TREND_URL, timeout=10)
+        if r.status_code != 200:
+            return None
+        data = r.json()
+        entries = data.get(key, [])
+        if not entries:
+            return None
+
+        now = time.time()
+        old_price = None
+        for ts, price in entries:
+            if now - ts >= 20 * 3600:
+                old_price = price
+            else:
+                break
+
+        if old_price is None:
+            old_price = entries[0][1]
+
+        return ((current_price - old_price) / old_price) * 100
+    except Exception as e:
+        print(f"خطا محاسبه تغییر روند: {e}")
+        return None
+
+def simple_forecast_label(key, current_price, momentum, sentiment_score):
     """
-    پیش‌بینی ساده و غیرقطعی بر اساس ترکیب شتاب روند قیمت + لحن کلمات کلیدی اخبار.
+    پیش‌بینی ساده و غیرقطعی بر اساس ترکیب سه عامل:
+    ۱) روند واقعی ۲۴ ساعته (مهم‌ترین وزن)
+    ۲) شتاب تغییرات قیمت (آیا روند تشدید یا تضعیف شده)
+    ۳) لحن کلمات کلیدی در عناوین خبری مرتبط
     این یک تخمین آماری ضعیف است که دقتش در عمل نزدیک به شانس است، نه پیش‌بینی دقیق.
     """
-    score = momentum * 0.5 + sentiment_score * 1.0
+    trend_change = get_trend_change_value(key, current_price)
+    trend_component = 0
+    if trend_change is not None:
+        trend_component = max(min(trend_change, 5), -5) / 5  # نرمال‌سازی به بازه [-1, 1]
 
-    if score > 0.7:
+    score = trend_component * 1.0 + momentum * 0.4 + sentiment_score * 0.6
+
+    if score > 0.5:
         return "📈 احتمال نسبی صعودی برای فردا"
-    elif score < -0.7:
+    elif score < -0.5:
         return "📉 احتمال نسبی نزولی برای فردا"
     else:
         return "➡️ احتمال نسبی خنثی برای فردا (سیگنال واضحی در داده‌ها دیده نشد)"
@@ -220,19 +269,21 @@ def translate_title(title):
 # ===================== ساخت پیام =====================
 
 def build_price_message():
-    gold = get_gold_price()
+    gold_18k, ounce_usd = get_gold_price_and_ounce()
     usd_rial = get_usd_to_rial()
     btc_usd, usdt_usd = get_crypto_prices_usd()
     news_titles = get_relevant_news(limit=8)
 
     lines = ["💰 <b>قیمت لحظه‌ای، روند و پیش‌بینی فردا</b>\n"]
 
-    if gold:
-        trend = get_trend_label("gold_18k", gold)
+    if gold_18k:
+        trend = get_trend_label("gold_18k", gold_18k)
         momentum = get_momentum("gold_18k")
         sentiment, has_news = news_sentiment_score(news_titles, "gold_18k")
-        forecast = simple_forecast_label("gold_18k", momentum, sentiment)
-        lines.append(f"🟡 <b>طلای ۱۸ عیار:</b> {gold:,} ریال")
+        forecast = simple_forecast_label("gold_18k", gold_18k, momentum, sentiment)
+        lines.append(f"🟡 <b>طلای ۱۸ عیار:</b> {gold_18k:,} ریال")
+        if ounce_usd:
+            lines.append(f"   (اونس جهانی: {ounce_usd:,.2f} دلار)")
         lines.append(f"   روند: {trend}")
         lines.append(f"   فردا: {forecast}")
     else:
@@ -242,7 +293,7 @@ def build_price_message():
         trend = get_trend_label("bitcoin", btc_usd)
         momentum = get_momentum("bitcoin")
         sentiment, has_news = news_sentiment_score(news_titles, "bitcoin")
-        forecast = simple_forecast_label("bitcoin", momentum, sentiment)
+        forecast = simple_forecast_label("bitcoin", btc_usd, momentum, sentiment)
         lines.append(f"\n₿ <b>بیت‌کوین:</b> {btc_usd:,.0f} دلار")
         lines.append(f"   روند: {trend}")
         lines.append(f"   فردا: {forecast}")
@@ -254,7 +305,7 @@ def build_price_message():
         trend = get_trend_label("tether", tether_rial)
         momentum = get_momentum("tether")
         sentiment, has_news = news_sentiment_score(news_titles, "tether")
-        forecast = simple_forecast_label("tether", momentum, sentiment)
+        forecast = simple_forecast_label("tether", tether_rial, momentum, sentiment)
         lines.append(f"\n💵 <b>تتر:</b> {tether_rial:,} ریال")
         lines.append(f"   روند: {trend}")
         lines.append(f"   فردا: {forecast}")
