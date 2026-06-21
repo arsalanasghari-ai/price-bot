@@ -217,25 +217,33 @@ def get_trend_change_value(key, current_price):
 
 def simple_forecast_label(key, current_price, momentum, sentiment_score):
     """
-    پیش‌بینی ساده و غیرقطعی بر اساس ترکیب سه عامل:
-    ۱) روند واقعی ۲۴ ساعته (مهم‌ترین وزن)
-    ۲) شتاب تغییرات قیمت (آیا روند تشدید یا تضعیف شده)
-    ۳) لحن کلمات کلیدی در عناوین خبری مرتبط
-    این یک تخمین آماری ضعیف است که دقتش در عمل نزدیک به شانس است، نه پیش‌بینی دقیق.
+    پیش‌بینی ساده بر اساس ترکیب سه عامل:
+    ۱) روند واقعی ۲۴ ساعته (بیشترین وزن)
+    ۲) شتاب تغییرات قیمت
+    ۳) لحن کلمات کلیدی اخبار
     """
     trend_change = get_trend_change_value(key, current_price)
+
+    # اگه روند خودش قوی بود (بیش از 1%)، همونو برگردون
+    if trend_change is not None:
+        if trend_change > 1.5:
+            return "📈 احتمال نسبی صعودی برای فردا"
+        elif trend_change < -1.5:
+            return "📉 احتمال نسبی نزولی برای فردا"
+
+    # اگه روند ضعیف بود، شتاب و خبر رو هم در نظر بگیر
     trend_component = 0
     if trend_change is not None:
-        trend_component = max(min(trend_change, 5), -5) / 5  # نرمال‌سازی به بازه [-1, 1]
+        trend_component = max(min(trend_change, 5), -5) / 5
 
     score = trend_component * 1.0 + momentum * 0.4 + sentiment_score * 0.6
 
-    if score > 0.5:
+    if score > 0.4:
         return "📈 احتمال نسبی صعودی برای فردا"
-    elif score < -0.5:
+    elif score < -0.4:
         return "📉 احتمال نسبی نزولی برای فردا"
     else:
-        return "➡️ احتمال نسبی خنثی برای فردا (سیگنال واضحی در داده‌ها دیده نشد)"
+        return "➡️ احتمال نسبی خنثی برای فردا"
 
 def get_relevant_news(limit=2):
     titles = []
