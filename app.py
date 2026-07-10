@@ -167,6 +167,8 @@ def _crypto_binance():
         if r.status_code == 200:
             btc = float(r.json()["price"])
             print(f"[binance] BTC=${btc:,.2f}")
+        else:
+            print(f"[binance-btc] status={r.status_code} body={r.text[:200]}")
     except Exception as e:
         print(f"[binance-btc] خطا: {e}")
     try:
@@ -176,6 +178,8 @@ def _crypto_binance():
             if usdc_per_usdt > 0:
                 usdt = round(1.0 / usdc_per_usdt, 4)
                 print(f"[binance] USDT=${usdt}")
+        else:
+            print(f"[binance-usdt] status={r.status_code} body={r.text[:200]}")
     except Exception as e:
         print(f"[binance-usdt] خطا: {e}")
     return btc, usdt
